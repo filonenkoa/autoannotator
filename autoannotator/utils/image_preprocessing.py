@@ -107,7 +107,7 @@ def resize_image(
 
 
 def np2onnx(
-    img: np.ndarray, color_mode: ImageColorFormat = ImageColorFormat.RGB
+    img: np.ndarray | List[np.ndarray], color_mode: ImageColorFormat = ImageColorFormat.RGB
 ) -> np.ndarray:
     """
     Convert numpy image to onnx-friendly input format
@@ -118,10 +118,19 @@ def np2onnx(
     Returns:
         (np.ndarray): ONNX-friendly input (BxCxHxW)
     """
+    if isinstance(img, list):
+        img = np.asarray(img)
+
     if color_mode == ImageColorFormat.BGR:
-        img = img[:, :, ::-1]
+        img = img[..., ::-1]
+
     img = np.asarray(img, dtype=np.float32)
-    img = np.expand_dims(img, 0)
+
+    if img.ndim == 3:
+        img = np.expand_dims(img, 0)
+    elif img.ndim != 4:
+        raise ValueError("np2onnx expects input with 3 or 4 dimensions")
+
     img = img.transpose(0, 3, 1, 2)
     return img
 

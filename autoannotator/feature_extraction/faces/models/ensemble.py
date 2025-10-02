@@ -28,7 +28,22 @@ class FaceFeatureExtractionEnsemle:
     def reduce(self, embeddings: Dict[str, np.ndarray]):
         match self.reduce_type:
             case "concat":
-                result_embedding = np.concatenate(list(embeddings.values()))
+                values = list(embeddings.values())
+                if not values:
+                    raise ValueError("No embeddings provided for reduction")
+
+                first = values[0]
+                if first.ndim == 1:
+                    result_embedding = np.concatenate(values, axis=0)
+                elif first.ndim == 2:
+                    batch_size = first.shape[0]
+                    if any(val.ndim != 2 or val.shape[0] != batch_size for val in values):
+                        raise ValueError("All embeddings must share the same batch dimension")
+                    result_embedding = np.concatenate(values, axis=1)
+                else:
+                    raise ValueError(
+                        "Unsupported embedding dimensions for concatenation"
+                    )
                 return result_embedding
             case _:
-                raise ValueError(f"Unknown reduce type {self.reduce}")
+                raise ValueError(f"Unknown reduce type {self.reduce_type}")
