@@ -132,8 +132,16 @@ def preprocess_annotations(annotations):
 
     model_indices = np.array(model_indices, dtype=np.int32)
     model_indices_old = np.array(model_indices_old, dtype=np.int32)
-    
+
+    # Important empty-case handling:
+    # If all models returned zero predictions, keep dtypes consistent (np arrays)
+    # so downstream code doesn't see python lists.
     if len(annotations['labels']) == 0:
+        annotations['labels'] = np.empty((0,), dtype=np.int32)
+        annotations['scores'] = np.empty((0,), dtype=np.float32)
+        annotations['boxes'] = np.empty((0, 4), dtype=np.float32)
+        if kps_arr is not None:
+            annotations['kps'] = np.empty((0, 0), dtype=np.float32)
         return annotations, model_indices, model_indices_old, num_models
 
     annotations['labels'] = np.concatenate(annotations['labels'], dtype=np.int32)
@@ -164,6 +172,10 @@ def weighted_boxes_fusion(
     :return: weighted_annotations: list of dict weighted annotations
     """
     annotations, model_indices, model_indices_old, num_models = preprocess_annotations(annotations)
+
+    # Fast-path for empty predictions.
+    if isinstance(annotations.get('scores'), np.ndarray) and annotations['scores'].size == 0:
+        return []
 
     if weights is None:
         weights = np.ones_like(annotations['scores'])

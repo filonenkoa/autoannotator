@@ -3,7 +3,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from typing import List
+from typing import List, Sequence
 from autoannotator.types.base import Detection
 from autoannotator.config.detection import DetectionConfig
 from autoannotator.utils.misc import (
@@ -35,7 +35,7 @@ class BaseDetector(ABC):
         kwargs = ", ".join([f"{k}={v}" for k, v in self.config.dict().items()])
         return f"{cls_name}({kwargs})"
 
-    def __call__(self, img: np.ndarray) -> List[Detection]:
+    def __call__(self, img: np.ndarray) -> Sequence[Detection]:
         """
         Detect objects on image
 
@@ -47,6 +47,14 @@ class BaseDetector(ABC):
         """
         out = self._predict(img)
         return out
+
+    def predict_batch(self, imgs: List[np.ndarray]) -> Sequence[Sequence[Detection]]:
+        """Detect objects on a batch of images.
+
+        Default implementation runs per-image inference in a Python loop.
+        Subclasses can override to use true batched ONNXRuntime inference.
+        """
+        return [self._predict(img) for img in imgs]
 
     def _init_session(self):
         """Init onnx runtime session"""
@@ -89,5 +97,5 @@ class BaseDetector(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _predict(self, img: np.ndarray) -> List[Detection]:
+    def _predict(self, img: np.ndarray) -> Sequence[Detection]:
         raise NotImplementedError

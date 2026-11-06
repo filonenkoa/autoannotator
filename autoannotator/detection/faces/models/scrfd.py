@@ -119,6 +119,105 @@ class SCRFD(BaseDetector):
         out = self._postprocess(raw_out, shift, scale)
         return out
 
+    def predict_batch(self, imgs: List[np.ndarray]) -> List[List[Face]]:
+        if not imgs:
+            return []
+
+        # If the exported ONNX model has a fixed batch size of 1, don't attempt batched inference.
+        try:
+            in_shape = self.session.get_inputs()[0].shape
+            if (
+                len(imgs) > 1
+                and isinstance(in_shape, (list, tuple))
+                and len(in_shape) >= 1
+                and isinstance(in_shape[0], int)
+                and in_shape[0] == 1
+            ):
+                return [self._predict(img) for img in imgs]
+        except Exception:  # noqa: BLE001
+            # If shape inspection fails for any reason, proceed with best-effort batching.
+            pass
+
+        # Try true batched inference; fall back to per-image if the exported model is fixed-batch.
+        try:
+            resized_imgs: list[np.ndarray] = []
+            shifts: list[Tuple2i] = []
+            scales: list[Tuple2f] = []
+            for img in imgs:
+                img_r, shift, scale = resize_image(
+                    img, size=self.input_size, keep_ratio=True, position="center"
+                )
+                img_r = normalize_image(img_r, mean=self.config.mean, std=self.config.std)
+                resized_imgs.append(img_r)
+                shifts.append(shift)
+                scales.append(scale)
+
+            blob = np2onnx(resized_imgs, color_mode=ImageColorFormat.RGB)
+            net_outs = self.session.run(self.output_names, {self.input_name: blob})
+
+            input_height = int(blob.shape[2])
+            input_width = int(blob.shape[3])
+
+            is_batched = getattr(net_outs[0], "ndim", 0) == 3
+            batch_size = int(blob.shape[0])
+
+            def _forward_one(b: int):
+                scores_list = []
+                bboxes_list = []
+                kpss_list = []
+                fmc = self.fmc
+                for idx, stride in enumerate(self._strides):
+                    if is_batched:
+                        scores = net_outs[idx][b]
+                        bbox_preds = net_outs[idx + fmc][b] * stride
+                        if self.use_kps:
+                            kps_preds = net_outs[idx + fmc * 2][b] * stride
+                    else:
+                        scores = net_outs[idx]
+                        bbox_preds = net_outs[idx + fmc] * stride
+                        if self.use_kps:
+                            kps_preds = net_outs[idx + fmc * 2] * stride
+
+                    height = input_height // stride
+                    width = input_width // stride
+                    key = (height, width, stride)
+                    if key in self.center_cache:
+                        anchor_centers = self.center_cache[key]
+                    else:
+                        anchor_centers = np.stack(
+                            np.mgrid[:height, :width][::-1], axis=-1
+                        ).astype(np.float32)
+                        anchor_centers = (anchor_centers * stride).reshape((-1, 2))
+                        if self._na > 1:
+                            anchor_centers = np.stack([anchor_centers] * self._na, axis=1).reshape(
+                                (-1, 2)
+                            )
+                        if len(self.center_cache) < 100:
+                            self.center_cache[key] = anchor_centers
+
+                    pos_inds = np.where(scores >= self.config.conf_thresh)[0]
+                    if pos_inds.size == 0:
+                        continue
+                    bboxes = distance2bbox(anchor_centers, bbox_preds)
+                    pos_scores = scores[pos_inds]
+                    pos_bboxes = bboxes[pos_inds]
+                    scores_list.append(pos_scores)
+                    bboxes_list.append(pos_bboxes)
+                    if self.use_kps:
+                        kpss = distance2kps(anchor_centers, kps_preds)
+                        kpss = kpss.reshape((kpss.shape[0], -1, 2))
+                        pos_kpss = kpss[pos_inds]
+                        kpss_list.append(pos_kpss)
+                return scores_list, bboxes_list, kpss_list
+
+            out: list[list[Face]] = []
+            for b in range(batch_size):
+                raw_out = _forward_one(b)
+                out.append(self._postprocess(raw_out, shift=shifts[b], scale=scales[b]))
+            return out
+        except Exception:  # noqa: BLE001
+            return [self._predict(img) for img in imgs]
+
     def _forward(self, blob):
         scores_list = []
         bboxes_list = []

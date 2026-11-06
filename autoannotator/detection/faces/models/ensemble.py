@@ -58,6 +58,27 @@ class FaceDetEnsemble:
 
         return predictions, meta, results
 
+    def predict_batch(
+        self, imgs: List[np.ndarray]
+    ) -> Tuple[List[List[Face]], List[List[dict]], Dict[str, List[List[Detection]]]]:
+        """Run inference on a batch of images.
+
+        Returns per-image reduced predictions + per-model raw results.
+        """
+        results: Dict[str, List[List[Detection]]] = {}
+        for model in self.models:
+            results[str(model.name)] = model.predict_batch(imgs)
+
+        predictions_batch: list[list[Face]] = []
+        meta_batch: list[list[dict]] = []
+        for i in range(len(imgs)):
+            per_img = {k: v[i] for k, v in results.items()}
+            preds, meta = self.reduce(per_img)
+            predictions_batch.append(preds)
+            meta_batch.append(meta)
+
+        return predictions_batch, meta_batch, results
+
     def reduce(
         self, results: Dict[str, List[Detection]]
     ) -> Tuple[List[Face], List[dict]]:

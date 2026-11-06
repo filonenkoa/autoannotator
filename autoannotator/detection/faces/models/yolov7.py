@@ -51,6 +51,52 @@ class YOLOv7(BaseDetector):
         out = self._postprocess(raw_out, shift, scale)
         return out
 
+    def predict_batch(self, imgs: List[np.ndarray]) -> List[List[Face]]:
+        if not imgs:
+            return []
+
+        # If the exported ONNX model has a fixed batch size of 1, don't attempt batched inference.
+        try:
+            in_shape = self.session.get_inputs()[0].shape
+            if (
+                len(imgs) > 1
+                and isinstance(in_shape, (list, tuple))
+                and len(in_shape) >= 1
+                and isinstance(in_shape[0], int)
+                and in_shape[0] == 1
+            ):
+                return [self._predict(img) for img in imgs]
+        except Exception:  # noqa: BLE001
+            pass
+
+        try:
+            resized_imgs: list[np.ndarray] = []
+            shifts: list[Tuple2i] = []
+            scales: list[Tuple2f] = []
+            for img in imgs:
+                img_r, shift, scale = resize_image(
+                    img, size=self.input_size, keep_ratio=True, position="center"
+                )
+                img_r = normalize_image(img_r, mean=self.config.mean, std=self.config.std)
+                resized_imgs.append(img_r)
+                shifts.append(shift)
+                scales.append(scale)
+
+            blob = np2onnx(resized_imgs, color_mode=ImageColorFormat.RGB)
+            raw_out = self.session.run([], {self.input_name: blob})
+
+            det = raw_out[0]
+            if det.ndim == 2:
+                det = det[None, ...]
+
+            batch_size = int(det.shape[0])
+            out: list[list[Face]] = []
+            for b in range(batch_size):
+                out.append(self._postprocess([det[b]], shift=shifts[b], scale=scales[b]))
+            return out
+        except Exception:  # noqa: BLE001
+            return [self._predict(img) for img in imgs]
+
     def _forward(self, blob):
         net_outs = self.session.run([], {self.input_name: blob})
         return net_outs
